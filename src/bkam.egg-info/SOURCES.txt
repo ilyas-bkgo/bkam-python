@@ -1,8 +1,0 @@
-README.md
-pyproject.toml
-src/bkam/__init__.py
-src/bkam.egg-info/PKG-INFO
-src/bkam.egg-info/SOURCES.txt
-src/bkam.egg-info/dependency_links.txt
-src/bkam.egg-info/requires.txt
-src/bkam.egg-info/top_level.txt
