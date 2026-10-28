@@ -3,6 +3,13 @@ from datetime import date
 
 import httpx
 
+from bkam.exceptions import (
+    APIError,
+    AuthenticationError,
+    BKAMConnectionError,
+    ConfigurationError,
+    RateLimitError,
+)
 from bkam.models import BanknoteRate, TransferRate
 
 BASE_URL = "https://api.centralbankofmorocco.ma/cours/Version1/api"
@@ -21,7 +28,7 @@ class BKAMClient:
     ):
         key = api_key or os.environ.get(API_KEY_ENV_VAR)
         if not key:
-            raise ValueError(
+            raise ConfigurationError(
                 f"No API key given. Pass api_key=... "
                 f"or set the {API_KEY_ENV_VAR} environment variable."
             )
@@ -59,8 +66,13 @@ class BKAMClient:
         if on is not None:
             params["date"] = on.isoformat()
 
-        response = self._http.get(path, params=params)
-        response.raise_for_status()
+        try:
+            response = self._http.get(path, params=params)
+        except httpx.TransportError as exc:
+            raise BKAMConnectionError(f"Could not reach the BKAM API: {exc}") from exc
+
+        if response.is_error:
+            raise _error_from_response(response)
         return response.json()
 
     def close(self) -> None:
@@ -71,3 +83,33 @@ class BKAMClient:
 
     def __exit__(self, *exc_info) -> None:
         self.close()
+
+
+def _error_from_response(response: httpx.Response) -> APIError:
+    message = _error_message(response)
+    status = response.status_code
+    if status == 401:
+        return AuthenticationError(message, status)
+    if status == 429:
+        return RateLimitError(message, status, retry_after=_retry_after(response))
+    return APIError(message, status)
+
+
+def _error_message(response: httpx.Response) -> str:
+    try:
+        body = response.json()
+    except ValueError:
+        body = None
+    if isinstance(body, dict) and isinstance(body.get("message"), str):
+        return body["message"]
+    return f"HTTP {response.status_code}: {response.reason_phrase}"
+
+
+def _retry_after(response: httpx.Response) -> float | None:
+    value = response.headers.get("Retry-After")
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except ValueError:
+        return None
