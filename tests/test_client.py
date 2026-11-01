@@ -189,3 +189,113 @@ def test_timeout_raises_connection_error():
     with BKAMClient(api_key="test-key") as client:
         with pytest.raises(BKAMConnectionError):
             client.get_banknote_rates()
+
+
+
+@respx.mock
+def test_retries_on_503_then_succeeds(no_sleep):
+    # Synthetic: we have not seen a real 503 from BKAM
+    route = respx.get(f"{BASE_URL}/CoursBBE").mock(
+        side_effect=[
+            httpx.Response(503),
+            httpx.Response(200, json=[EUR_PAYLOAD]),
+        ]
+    )
+
+    with BKAMClient(api_key="test-key") as client:
+        rates = client.get_banknote_rates()
+
+    assert len(rates) == 1
+    assert route.call_count == 2
+    assert no_sleep == [0.5]
+
+
+@respx.mock
+def test_gives_up_after_max_retries(no_sleep):
+    route = respx.get(f"{BASE_URL}/CoursBBE").mock(return_value=httpx.Response(503))
+
+    with BKAMClient(api_key="test-key", max_retries=2) as client:
+        with pytest.raises(APIError) as exc_info:
+            client.get_banknote_rates()
+
+    assert exc_info.value.status_code == 503
+    assert route.call_count == 3  # 1 attempt + 2 retries
+    assert no_sleep == [0.5, 1.0]  # backoff doubles
+
+
+@respx.mock
+def test_retries_network_error_then_succeeds(no_sleep):
+    route = respx.get(f"{BASE_URL}/CoursBBE").mock(
+        side_effect=[
+            httpx.ConnectError("network down"),
+            httpx.Response(200, json=[EUR_PAYLOAD]),
+        ]
+    )
+
+    with BKAMClient(api_key="test-key") as client:
+        rates = client.get_banknote_rates()
+
+    assert len(rates) == 1
+    assert route.call_count == 2
+
+
+@respx.mock
+def test_waits_for_retry_after_header(no_sleep):
+    route = respx.get(f"{BASE_URL}/CoursBBE").mock(
+        side_effect=[
+            httpx.Response(429, headers={"Retry-After": "3"}),
+            httpx.Response(200, json=[EUR_PAYLOAD]),
+        ]
+    )
+
+    with BKAMClient(api_key="test-key") as client:
+        client.get_banknote_rates()
+
+    assert route.call_count == 2
+    assert no_sleep == [3.0]
+
+
+@respx.mock
+def test_does_not_wait_for_very_long_retry_after(no_sleep):
+    route = respx.get(f"{BASE_URL}/CoursBBE").mock(
+        return_value=httpx.Response(429, headers={"Retry-After": "120"})
+    )
+
+    with BKAMClient(api_key="test-key") as client:
+        with pytest.raises(RateLimitError) as exc_info:
+            client.get_banknote_rates()
+
+    assert exc_info.value.retry_after == 120.0
+    assert route.call_count == 1
+    assert no_sleep == []
+
+
+@respx.mock
+def test_does_not_retry_authentication_errors(no_sleep):
+    route = respx.get(f"{BASE_URL}/CoursBBE").mock(
+        return_value=httpx.Response(401, json=AUTH_ERROR_BODY)
+    )
+
+    with BKAMClient(api_key="bad-key") as client:
+        with pytest.raises(AuthenticationError):
+            client.get_banknote_rates()
+
+    assert route.call_count == 1
+    assert no_sleep == []
+
+
+@respx.mock
+def test_max_retries_zero_disables_retrying(no_sleep):
+    route = respx.get(f"{BASE_URL}/CoursBBE").mock(return_value=httpx.Response(503))
+
+    with BKAMClient(api_key="test-key", max_retries=0) as client:
+        with pytest.raises(APIError):
+            client.get_banknote_rates()
+
+    assert route.call_count == 1
+    assert no_sleep == []
+
+
+def test_negative_max_retries_is_rejected():
+    with pytest.raises(ConfigurationError):
+        BKAMClient(api_key="test-key", max_retries=-1)
