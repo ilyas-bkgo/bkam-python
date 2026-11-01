@@ -1,4 +1,5 @@
 import os
+import time
 from datetime import date
 
 import httpx
@@ -15,6 +16,13 @@ from bkam.models import BanknoteRate, TransferRate
 BASE_URL = "https://api.centralbankofmorocco.ma/cours/Version1/api"
 API_KEY_ENV_VAR = "BKAM_API_KEY"
 
+RETRY_STATUS_CODES = {429, 502, 503, 504}
+MAX_RETRY_WAIT = 30.0  # seconds; a longer Retry-After is not waited for
+
+
+def _sleep(seconds: float) -> None:
+    time.sleep(seconds)
+
 
 class BKAMClient:
     """Synchronous client for the Bank Al-Maghrib exchange-rate API."""
@@ -25,6 +33,8 @@ class BKAMClient:
         *,
         base_url: str = BASE_URL,
         timeout: float = 10.0,
+        max_retries: int = 2,
+        backoff_factor: float = 0.5,
     ):
         key = api_key or os.environ.get(API_KEY_ENV_VAR)
         if not key:
@@ -32,6 +42,11 @@ class BKAMClient:
                 f"No API key given. Pass api_key=... "
                 f"or set the {API_KEY_ENV_VAR} environment variable."
             )
+        if max_retries < 0:
+            raise ConfigurationError("max_retries must be 0 or greater.")
+
+        self._max_retries = max_retries
+        self._backoff_factor = backoff_factor
         self._http = httpx.Client(
             base_url=base_url,
             headers={"Ocp-Apim-Subscription-Key": key},
@@ -66,14 +81,41 @@ class BKAMClient:
         if on is not None:
             params["date"] = on.isoformat()
 
-        try:
-            response = self._http.get(path, params=params)
-        except httpx.TransportError as exc:
-            raise BKAMConnectionError(f"Could not reach the BKAM API: {exc}") from exc
+        for attempt in range(self._max_retries + 1):
+            is_last_attempt = attempt == self._max_retries
 
-        if response.is_error:
-            raise _error_from_response(response)
-        return response.json()
+            try:
+                response = self._http.get(path, params=params)
+            except httpx.TransportError as exc:
+                if is_last_attempt:
+                    raise BKAMConnectionError(
+                        f"Could not reach the BKAM API: {exc}"
+                    ) from exc
+                _sleep(self._backoff(attempt))
+                continue
+
+            if response.status_code in RETRY_STATUS_CODES and not is_last_attempt:
+                delay = self._retry_delay(response, attempt)
+                if delay is not None:
+                    _sleep(delay)
+                    continue
+
+            if response.is_error:
+                raise _error_from_response(response)
+            return response.json()
+
+        raise AssertionError("unreachable")  # the loop always returns or raises
+
+    def _backoff(self, attempt: int) -> float:
+        return self._backoff_factor * 2**attempt
+
+    def _retry_delay(self, response: httpx.Response, attempt: int) -> float | None:
+        retry_after = _retry_after(response)
+        if retry_after is None:
+            return self._backoff(attempt)
+        if retry_after > MAX_RETRY_WAIT:
+            return None  # too long to wait: let the caller handle the error
+        return retry_after
 
     def close(self) -> None:
         self._http.close()
