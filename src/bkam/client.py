@@ -1,6 +1,8 @@
+import math
 import os
 import time
-from datetime import date
+from datetime import date, datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import TypeVar
 
 import httpx
@@ -48,6 +50,9 @@ class BKAMClient:
             )
         if max_retries < 0:
             raise ConfigurationError("max_retries must be 0 or greater.")
+
+        if not math.isfinite(backoff_factor) or backoff_factor < 0:
+            raise ConfigurationError("backoff_factor must be a finite number >= 0.")
 
         self._max_retries = max_retries
         self._backoff_factor = backoff_factor
@@ -111,7 +116,7 @@ class BKAMClient:
         raise AssertionError("unreachable")  # the loop always returns or raises
 
     def _backoff(self, attempt: int) -> float:
-        return self._backoff_factor * 2**attempt
+        return min(self._backoff_factor * 2**attempt, MAX_RETRY_WAIT)
 
     def _retry_delay(self, response: httpx.Response, attempt: int) -> float | None:
         retry_after = _retry_after(response)
@@ -155,10 +160,26 @@ def _retry_after(response: httpx.Response) -> float | None:
     value = response.headers.get("Retry-After")
     if value is None:
         return None
+
+    value = value.strip()
     try:
-        return float(value)
+        seconds = float(value)
     except ValueError:
+        seconds = _seconds_until(value)
+
+    if seconds is None or not math.isfinite(seconds) or seconds < 0:
         return None
+    return seconds
+
+
+def _seconds_until(http_date: str) -> float | None:
+    try:
+        when = parsedate_to_datetime(http_date)
+    except (TypeError, ValueError):
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return (when - datetime.now(timezone.utc)).total_seconds()
 
     
 
