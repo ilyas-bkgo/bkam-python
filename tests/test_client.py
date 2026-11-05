@@ -1,4 +1,6 @@
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
+from email.utils import format_datetime
+
 from decimal import Decimal
 
 import httpx
@@ -337,3 +339,64 @@ def test_transfer_rates_reject_malformed_body():
 
 def test_invalid_response_error_is_a_bkam_error():
     assert issubclass(InvalidResponseError, BKAMError)
+
+
+@pytest.mark.parametrize("bad_factor", [-1, float("nan"), float("inf")])
+def test_invalid_backoff_factor_is_rejected(bad_factor):
+    with pytest.raises(ConfigurationError):
+        BKAMClient(api_key="test-key", backoff_factor=bad_factor)
+
+
+@pytest.mark.parametrize(
+    "bad_header",
+    [
+        "-5",  # negative
+        "nan",  # not a real number
+        "inf",  # infinite
+        "soon",  # not a number or a date
+        "Wed, 21 Oct 2015 07:28:00 GMT",  # a date in the past
+    ],
+)
+@respx.mock
+def test_unusable_retry_after_falls_back_to_backoff(bad_header, no_sleep):
+    respx.get(f"{BASE_URL}/CoursBBE").mock(
+        side_effect=[
+            httpx.Response(429, headers={"Retry-After": bad_header}),
+            httpx.Response(200, json=[EUR_PAYLOAD]),
+        ]
+    )
+
+    with BKAMClient(api_key="test-key") as client:
+        client.get_banknote_rates()
+
+    assert no_sleep == [0.5]  # the default backoff, not the bad header
+
+
+@respx.mock
+def test_retry_after_accepts_http_date(no_sleep):
+    in_ten_seconds = datetime.now(timezone.utc) + timedelta(seconds=10)
+    header = format_datetime(in_ten_seconds, usegmt=True)
+    respx.get(f"{BASE_URL}/CoursBBE").mock(
+        side_effect=[
+            httpx.Response(429, headers={"Retry-After": header}),
+            httpx.Response(200, json=[EUR_PAYLOAD]),
+        ]
+    )
+
+    with BKAMClient(api_key="test-key") as client:
+        client.get_banknote_rates()
+
+    assert len(no_sleep) == 1
+    assert 0 < no_sleep[0] <= 10  # HTTP dates have 1-second resolution
+
+
+@respx.mock
+def test_backoff_is_capped(no_sleep):
+    route = respx.get(f"{BASE_URL}/CoursBBE").mock(return_value=httpx.Response(503))
+
+    with BKAMClient(api_key="test-key", max_retries=5, backoff_factor=10) as client:
+        with pytest.raises(APIError):
+            client.get_banknote_rates()
+
+    assert route.call_count == 6
+    assert no_sleep == [10.0, 20.0, 30.0, 30.0, 30.0]  # never above the cap
