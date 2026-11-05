@@ -7,6 +7,7 @@ from bkam.exceptions import (
     BKAMConnectionError,
     BKAMError,
     ConfigurationError,
+    InvalidResponseError,
     RateLimitError,
 )
 from bkam.models import BanknoteRate, TransferRate
@@ -21,6 +22,7 @@ __all__ = [
     "BKAMError",
     "BanknoteRate",
     "ConfigurationError",
+    "InvalidResponseError",
     "RateLimitError",
     "TransferRate",
     "__version__",

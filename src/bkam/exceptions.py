@@ -9,6 +9,9 @@ class ConfigurationError(BKAMError):
 class BKAMConnectionError(BKAMError):
     """The API could not be reached (network failure or timeout)."""
 
+class InvalidResponseError(BKAMError):
+    """The API answered successfully, but the body was not in the expected format."""
+
 
 class APIError(BKAMError):
     """The API answered with an error status code."""
