@@ -9,7 +9,7 @@ class BanknoteRate(BaseModel):
     model_config = ConfigDict(frozen=True, populate_by_name=True)
 
     currency: str = Field(alias="libDevise")
-    unit: int = Field(alias="uniteDevise")
+    unit: int = Field(alias="uniteDevise", gt= 0)
     buy: Decimal = Field(alias="achatClientele")
     sell: Decimal = Field(alias="venteClientele")
     published_at: datetime = Field(alias="date")
@@ -29,7 +29,7 @@ class TransferRate(BaseModel):
     model_config = ConfigDict(frozen=True, populate_by_name=True)
 
     currency: str = Field(alias="libDevise")
-    unit: int = Field(alias="uniteDevise")
+    unit: int = Field(alias="uniteDevise", gt= 0)
     average: Decimal = Field(alias="moyen")
     published_at: datetime = Field(alias="date")
 

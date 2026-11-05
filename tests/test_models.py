@@ -4,7 +4,6 @@ from decimal import Decimal
 import pytest
 from pydantic import ValidationError
 
-from bkam.models import BanknoteRate
 from bkam.models import BanknoteRate, TransferRate
 
 # Real data copied from the BKAM API (2026-10-16)
@@ -116,3 +115,15 @@ def test_transfer_rate_is_read_only():
 
     with pytest.raises(ValidationError):
         rate.average = Decimal("1")
+
+
+@pytest.mark.parametrize("bad_unit", [0, -1, -100])
+def test_banknote_rate_rejects_non_positive_unit(bad_unit):
+    with pytest.raises(ValidationError):
+        BanknoteRate.model_validate({**EUR_PAYLOAD, "uniteDevise": bad_unit})
+
+
+@pytest.mark.parametrize("bad_unit", [0, -1, -100])
+def test_transfer_rate_rejects_non_positive_unit(bad_unit):
+    with pytest.raises(ValidationError):
+        TransferRate.model_validate({**EUR_TRANSFER_PAYLOAD, "uniteDevise": bad_unit})
