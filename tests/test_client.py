@@ -10,7 +10,9 @@ from bkam.exceptions import (
     APIError,
     AuthenticationError,
     BKAMConnectionError,
+    BKAMError,
     ConfigurationError,
+    InvalidResponseError,
     RateLimitError,
 )
 
@@ -299,3 +301,39 @@ def test_max_retries_zero_disables_retrying(no_sleep):
 def test_negative_max_retries_is_rejected():
     with pytest.raises(ConfigurationError):
         BKAMClient(api_key="test-key", max_retries=-1)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"{}",  # a JSON object instead of a list
+        b"null",  # JSON, but not a list
+        b"<html>oops</html>",  # not JSON at all
+        b"[1, 2, 3]",  # a list, but not of objects
+        b'[{"libDevise": "EUR"}]',  # an object with missing fields
+    ],
+)
+@respx.mock
+def test_malformed_success_body_raises_invalid_response_error(body):
+    respx.get(f"{BASE_URL}/CoursBBE").mock(
+        return_value=httpx.Response(200, content=body)
+    )
+
+    with BKAMClient(api_key="test-key") as client:
+        with pytest.raises(InvalidResponseError):
+            client.get_banknote_rates()
+
+
+@respx.mock
+def test_transfer_rates_reject_malformed_body():
+    respx.get(f"{BASE_URL}/CoursVirement").mock(
+        return_value=httpx.Response(200, content=b"{}")
+    )
+
+    with BKAMClient(api_key="test-key") as client:
+        with pytest.raises(InvalidResponseError):
+            client.get_transfer_rates()
+
+
+def test_invalid_response_error_is_a_bkam_error():
+    assert issubclass(InvalidResponseError, BKAMError)
