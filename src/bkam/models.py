@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -37,4 +37,17 @@ class TransferRate(BaseModel):
     def average_per_unit(self) -> Decimal:
         return self.average / self.unit
 
+
+class MonetaryPolicyOperation(BaseModel):
+    """Result of a central-bank monetary policy operation (auction)."""
+
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+
+    auction_date: date = Field(alias="dateAdjudication")
+    value_date: date = Field(alias="dateValeur")
+    maturity_date: date = Field(alias="dateEcheance")
+    instrument: str
+    amount_requested: Decimal = Field(alias="mntDemande", ge=0)
+    amount_awarded: Decimal = Field(alias="mntServi", ge=0)
+    rate: Decimal = Field(alias="taux")
     

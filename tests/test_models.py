@@ -1,10 +1,10 @@
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
 import pytest
 from pydantic import ValidationError
 
-from bkam.models import BanknoteRate, TransferRate
+from bkam.models import BanknoteRate, TransferRate, MonetaryPolicyOperation
 
 # Real data copied from the BKAM API (2026-10-16)
 JPY_PAYLOAD = {
@@ -42,6 +42,26 @@ DZD_TRANSFER_PAYLOAD = {
     "libDevise": "DZD",
     "moyen": 0.7226,
     "uniteDevise": 10,
+}
+
+ADVANCE_PAYLOAD = {
+    "dateAdjudication": "2026-10-07",
+    "dateValeur": "2026-10-08",
+    "dateEcheance": "2026-10-15",
+    "instrument": "avances à 7 jours",
+    "mntDemande": 52590.0,
+    "mntServi": 52590.0,
+    "taux": 2.25,
+}
+
+PARTIAL_PAYLOAD = {
+    "dateAdjudication": "2026-10-20",
+    "dateValeur": "2026-10-22",
+    "dateEcheance": "2026-11-19",
+    "instrument": "prêt garanti",
+    "mntDemande": 10000.0,
+    "mntServi": 2855.0,
+    "taux": 2.25,
 }
 
 def test_parses_api_payload():
@@ -127,3 +147,35 @@ def test_banknote_rate_rejects_non_positive_unit(bad_unit):
 def test_transfer_rate_rejects_non_positive_unit(bad_unit):
     with pytest.raises(ValidationError):
         TransferRate.model_validate({**EUR_TRANSFER_PAYLOAD, "uniteDevise": bad_unit})
+
+
+
+def test_monetary_operation_parses_api_payload():
+    op = MonetaryPolicyOperation.model_validate(ADVANCE_PAYLOAD)
+
+    assert op.auction_date == date(2026, 10, 7)
+    assert op.value_date == date(2026, 10, 8)
+    assert op.maturity_date == date(2026, 10, 15)
+    assert op.instrument == "avances à 7 jours"
+    assert op.amount_requested == Decimal("52590.0")
+    assert op.amount_awarded == Decimal("52590.0")
+    assert op.rate == Decimal("2.25")
+
+
+def test_monetary_operation_can_be_partially_awarded():
+    op = MonetaryPolicyOperation.model_validate(PARTIAL_PAYLOAD)
+
+    assert op.amount_awarded < op.amount_requested
+    assert op.amount_awarded == Decimal("2855.0")
+
+
+def test_monetary_operation_rejects_negative_amounts():
+    with pytest.raises(ValidationError):
+        MonetaryPolicyOperation.model_validate({**ADVANCE_PAYLOAD, "mntServi": -1})
+
+
+def test_monetary_operation_rejects_invalid_date():
+    with pytest.raises(ValidationError):
+        MonetaryPolicyOperation.model_validate(
+            {**ADVANCE_PAYLOAD, "dateAdjudication": "not-a-date"}
+        )
